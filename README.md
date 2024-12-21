@@ -1,33 +1,27 @@
-
 # OURPROJECTONE
 
-# This is design of our project.
+# Project Overview
+This project was created to design a fully functional AWS infrastructure for a WordPress deployment. The architecture includes a VPC, subnets, NAT and Internet gateways, autoscaling, and a load balancer, as well as an RDS database cluster and Route 53 configuration for DNS management.
 
-<img width="487" alt="Screenshot 2024-05-14 at 7 02 57 PM" src="https://github.com/freyac777/terraform-aws-ourprojectone/assets/164959620/39dfd9a5-9349-4812-a976-ca0f91367833">
+![Screenshot](https://github.com/freyac777/terraform-aws-ourprojectone/assets/164959620/39dfd9a5-9349-4812-a976-ca0f91367833)
 
+# Day 1: Setting up VPC and Subnets
+I started by creating a VPC with three public and three private subnets. Additionally, I set up a NAT gateway, an internet gateway, and route tables to facilitate communication between the resources.
 
-# In our first day we start working on vpc and subnets, we cretaed vpc with three public and three private subnest.
-# We also created NAT gateway and internet gateway for our subnets. We also did configuration of our route tables.
-1. vpc name - main
-2.  we define subnets public and private, Give them variables.
-Here are code how this looks like:
-
-
-```
-# Crete vpc
-
+## VPC and Subnets Configuration
+```hcl
+# Create VPC
 resource "aws_vpc" "main" {
   cidr_block = var.vpc_cidr_block
 }
 
 # Create subnets
-
 resource "aws_subnet" "public" {
-  count             = 3
-  vpc_id            = aws_vpc.main.id
-  cidr_block        = var.public_subnet_cidr_blocks[count.index]
+  count                   = 3
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = var.public_subnet_cidr_blocks[count.index]
   map_public_ip_on_launch = true
-  availability_zone = element(var.azs, count.index)
+  availability_zone       = element(var.azs, count.index)
 }
 
 resource "aws_subnet" "private" {
@@ -37,30 +31,23 @@ resource "aws_subnet" "private" {
   availability_zone = element(var.azs, count.index)
 }
 
-
-# Cretae internet Gateway
-
+# Create Internet Gateway
 resource "aws_internet_gateway" "igw" {
   vpc_id = aws_vpc.main.id
 }
 
-
 # Create NAT Gateways
-
-
 resource "aws_nat_gateway" "ngw" {
-  count           = 3
-  allocation_id   = aws_eip.nat[count.index].id
-  subnet_id       = aws_subnet.private[count.index].id
+  count         = 3
+  allocation_id = aws_eip.nat[count.index].id
+  subnet_id     = aws_subnet.public[count.index].id
 }
 
 resource "aws_eip" "nat" {
   count = 3
 }
 
-
-#Create Route tables
-
+# Create Route Tables
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.main.id
   
@@ -82,11 +69,12 @@ resource "aws_route_table_association" "public" {
 
 resource "aws_route_table" "private" {
   vpc_id = aws_vpc.main.id
-  count          = 3
+  
   route {
     cidr_block = "0.0.0.0/0"
-    gateway_id = aws_nat_gateway.ngw[count.index].id
+    nat_gateway_id = aws_nat_gateway.ngw[count.index].id
   }
+
   tags = {
     Name = "private-route-table"
   }
@@ -99,11 +87,8 @@ resource "aws_route_table_association" "private" {
 }
 ```
 
-
-# Also we create variables to get our job little bit easy.
-
-
-```
+## Variables Configuration
+```hcl
 variable "region" {
   description = "AWS region"
   default     = "us-east-1"
@@ -125,131 +110,73 @@ variable "private_subnet_cidr_blocks" {
 }
 
 variable "azs" {
- type        = list(string)
- description = "Availability Zones"
- default     = ["us-east-1a", "us-east-1b", "us-east-1c"]
+  type        = list(string)
+  description = "Availability Zones"
+  default     = ["us-east-1a", "us-east-1b", "us-east-1c"]
 }
 ```
 
+# Day 2: Autoscaling, Templates, and Load Balancer
+On the second day, I set up autoscaling, launch templates, and a load balancer. I also configured user data to deploy WordPress.
 
-# In next day we create autoscaling, Template and load balancer for our project, we create user data too. 
-# And make sure that all this services was working good.
-# We define our instances max and min capacity.
-# alos we configure load balancer lisssner to port 80
-# And in same file we attachedd autoscaling ion our wordpress
-
-
-```
-
+## Launch Template and Autoscaling
+```hcl
 resource "aws_launch_template" "projecttemplate" {
   name_prefix   = "projecttemplate-launch-template"
-  image_id      = "ami-07caf09b362be10b8" 
-  instance_type = "t2.large"   
-  key_name      = "local"   
-  count = 1
+  image_id      = "ami-07caf09b362be10b8"
+  instance_type = "t2.large"
+  key_name      = "local"
+
   network_interfaces {
-  security_groups = [aws_security_group.projectsec.id, aws_security_group.projectsec1.id]
-  associate_public_ip_address = true
-  subnet_id                   = aws_subnet.public[count.index].id
-  delete_on_termination       = true 
+    security_groups           = [aws_security_group.projectsec.id]
+    associate_public_ip_address = true
+    subnet_id                 = aws_subnet.public[0].id
+    delete_on_termination     = true
+  }
+
+  user_data = base64encode(<<-EOF
+    #!/bin/bash
+    yum update -y
+    yum install -y httpd php php-mysqlnd
+    systemctl start httpd
+    systemctl enable httpd
+    wget -c https://wordpress.org/latest.tar.gz
+    tar -xvzf latest.tar.gz -C /var/www/html
+    cp -r /var/www/html/wordpress/* /var/www/html/
+    chown -R apache:apache /var/www/html/
+    mv /var/www/html/wp-config-sample.php /var/www/html/wp-config.php
+    sed -i "s/database_name_here/admin/" /var/www/html/wp-config.php
+    sed -i "s/username_here/admin/" /var/www/html/wp-config.php
+    sed -i "s/password_here/password/" /var/www/html/wp-config.php
+    sed -i "s/localhost/${aws_db_instance.writer.endpoint}/" /var/www/html/wp-config.php
+    EOF
+  )
 }
-
-
-
-#   user_data = base64encode (<<EOF
-# #!/bin/bash
-# yum update -y
-# yum install -y httpd php php-mysqlnd
-# systemctl start httpd
-# systemctl enable httpd
-# wget -c https://wordpress.org/latest.tar.gz
-# tar -xvzf latest.tar.gz -C /var/www/html
-# cp -r /var/www/html/wordpress/* /var/www/html/
-# chown -R apache:apache /var/www/html/
-
-# cd /var/www/html/
-# echo "
-# <?php
-# define( 'DB_NAME', 'admin' );
-# define( 'DB_USER', 'admin' );
-# define( 'DB_PASSWORD', 'password' );
-# define( 'DB_HOST', 'terraform-**************************.ct6kq4048kie.us-east-1.rds.amazonaws.com' );
-# define( 'DB_CHARSET', 'utf8mb4' );
-# define( 'DB_COLLATE', '' );
-# define( 'AUTH_KEY',         'admin' );                                                             
-# define( 'SECURE_AUTH_SALT', 'admin' );
-# define( 'LOGGED_IN_SALT',   'admin' );
-# define( 'NONCE_SALT',       'admin' );
-# \$table_prefix = 'wp_';
-# define( 'WP_DEBUG', false );
-# if ( ! defined( 'ABSPATH' ) ) {
-#         define( 'ABSPATH', __DIR__ . '/' );
-# }
-# require_once ABSPATH . 'wp-settings.php';
-# " > wp-config.php
-
-# service httpd restart
-# EOF
-#   )
-    
-#}
-
-user_data     = base64encode (<<-EOF
-                  #!/bin/bash
-                  yum update -y
-                  yum install -y httpd php php-mysqlnd
-                  systemctl start httpd
-                  systemctl enable httpd
-                  wget -c https://wordpress.org/latest.tar.gz
-                  tar -xvzf latest.tar.gz -C /var/www/html
-                  cp -r /var/www/html/wordpress/* /var/www/html/
-                  chown -R apache:apache /var/www/html/
-                  mv /var/www/html/wp-config-sample.php /var/www/html/wp-config.php
-                  sed -i "s/database_name_here/admin/" /var/www/html/wp-config.php
-                  sed -i "s/username_here/admin/" /var/www/html/wp-config.php
-                  sed -i "s/password_here/password/" /var/www/html/wp-config.php
-                  sed -i "s/localhost/${aws_db_instance.writer.endpoint}/" /var/www/html/wp-config.php
-                  EOF
-                  )
-}
-
- 
-# Create auto scaling
-
-
 
 resource "aws_autoscaling_group" "asg" {
   name = "projecttemplate-asg"
 
   launch_template {
-    id = aws_launch_template.projecttemplate[0].id
-    # vesrion = "$Latest"
+    id = aws_launch_template.projecttemplate.id
   }
 
-  min_size             = 1
-  max_size             = 5
-  desired_capacity     = 1  
-  health_check_type    = "EC2"
-  health_check_grace_period = 300  
-  
+  min_size                = 1
+  max_size                = 5
+  desired_capacity        = 1
+  health_check_type       = "EC2"
+  health_check_grace_period = 300
 }
+```
 
-# # Create an ALB
-
-
+## Load Balancer
+```hcl
 resource "aws_lb" "wordpress_alb" {
   name               = "wordpress-alb"
   internal           = false
   load_balancer_type = "application"
-  security_groups    = [aws_security_group.projectsec1.id]       # needt to change
-  #subnets            = concat(aws_subnet.public[*].id, aws_subnet.private[*].id)
-  subnets            = concat(aws_subnet.public[*].id)
-  tags = {
-    Name = "WordPressALB"
-  }
+  security_groups    = [aws_security_group.projectsec.id]
+  subnets            = aws_subnet.public[*].id
 }
-
-
 
 resource "aws_lb_listener" "wordpress" {
   load_balancer_arn = aws_lb.wordpress_alb.arn
@@ -262,55 +189,58 @@ resource "aws_lb_listener" "wordpress" {
   }
 }
 
-
 resource "aws_lb_target_group" "Wordpress_TG" {
-   name     = "learn-asg-terramino"
-   port     = 80
-   protocol = "HTTP"
-   vpc_id   = aws_vpc.main.id
- }
+  name     = "wordpress-target-group"
+  port     = 80
+  protocol = "HTTP"
+  vpc_id   = aws_vpc.main.id
+}
 
-resource "aws_autoscaling_attachment" "wordpress_AAA" {
+resource "aws_autoscaling_attachment" "wordpress" {
   autoscaling_group_name = aws_autoscaling_group.asg.id
-  lb_target_group_arn  = aws_lb_target_group.Wordpress_TG.arn
-  
+  lb_target_group_arn    = aws_lb_target_group.Wordpress_TG.arn
 }
 ```
 
-# Our next step is security group. We create sec. groups for our subnets and database.
-
-# alos we cretae backend and store our tfstate file in s3 bucket. Becouse in such case its easy for group members to work in same project at same time.
-
-file for that: 
-
-```
- terraform {
-   backend "s3" {
-     bucket = "nodar-terraform6"
-     key    = "terraform.tfstate"
-     region = "us-east-1"
-   }
- }
-```
-
-# After that we did rds cluster and, we create db instacnes for writer and reader.  We choose our engine my mysql and
-# also configure some instance classes with username and passwords.
-
-
-## finnaly we create 53 to make sure that our project was running.
-## We define here our  Zone id and domain name.
-
-
-```
-resource "aws_route53_record" "test" {
-  zone_id = "Z00084981ESKE4O2GY2WC"  # Specify the Route 53 hosted zone ID where you want to create the record
-  name    = "wordpress"  # Specify the domain name you want to associate with the ALB
-  type    = "A"
-  alias {
-    name                   = aws_lb.wordpress_alb.dns_name  # Specify the DNS name of your ALB
-    zone_id                = aws_lb.wordpress_alb.zone_id  # Specify the hosted zone ID of your ALB
-    evaluate_target_health = true
-    
+# Backend Configuration for Collaboration
+```hcl
+terraform {
+  backend "s3" {
+    bucket = "nodar-terraform6"
+    key    = "terraform.tfstate"
+    region = "us-east-1"
   }
 }
 ```
+
+# RDS Cluster Configuration
+```hcl
+resource "aws_db_instance" "writer" {
+  engine         = "mysql"
+  instance_class = "db.t3.medium"
+  username       = "admin"
+  password       = "password"
+  allocated_storage = 20
+}
+
+resource "aws_db_instance" "reader" {
+  engine         = "mysql"
+  instance_class = "db.t3.medium"
+  username       = "admin"
+  password       = "password"
+  allocated_storage = 20
+}
+```
+
+# Route 53 Configuration
+```hcl
+resource "aws_route53_record" "wordpress" {
+  zone_id = "Z00084981ESKE4O2GY2WC"
+  name    = "wordpress"
+  type    = "A"
+  alias {
+    name                   = aws_lb.wordpress_alb.dns_name
+    zone_id                = aws_lb.wordpress_alb.zone_id
+    evaluate_target_health = true
+  }
+}
